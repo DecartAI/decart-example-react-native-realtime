@@ -18,7 +18,7 @@ Stack (matches the Expo example):
 
 ```json
 {
-  "@decartai/sdk": "0.1.14",
+  "@decartai/sdk": "0.2.11",
   "livekit-client": "2.20.1",
   "@livekit/react-native": "2.11.1",
   "@livekit/react-native-webrtc": "144.1.1",
@@ -30,13 +30,14 @@ Stack (matches the Expo example):
 
 - Node 20+
 - Xcode + CocoaPods (iOS) and/or Android Studio (Android)
-- A **physical device** — the camera/WebRTC stack does not work in simulators
+- A physical device, or the iOS Simulator with the bundled-video patch (see
+  [Running on the iOS Simulator](#running-on-the-ios-simulator))
 - A Decart API key from [platform.decart.ai](https://platform.decart.ai)
 
 ## Setup
 
 ```bash
-npm install
+npm install   # also applies patches/ via patch-package (postinstall)
 
 # iOS native deps
 cd ios && bundle install && bundle exec pod install && cd ..
@@ -63,9 +64,45 @@ npm run ios      # or: npm run android
   app loads**, so it is the very first import in `index.js`.
 - `src/media-streams.ts` — captures the camera via LiveKit's `mediaDevices.getUserMedia`.
 - `src/useWebRTC.ts` — the core Decart lifecycle: `createDecartClient` →
-  `getMediaStream` → `client.realtime.connect(stream, { model, onRemoteStream })`.
+  `getMediaStream` → `client.realtime.connect(stream, { model, onRemoteStream, onConnectionChange })`.
+  The loading state ends on `connectionChange === "generating"` (the server produced
+  its first transformed frame), not when a remote stream object appears: `connected`
+  only means the room was joined and the camera track published.
 - `src/VideoRenderer.tsx` — renders local + remote streams with `RTCView`.
 - `App.tsx` — camera permission, a model selector, and a start/stop button.
+
+## Running on the iOS Simulator
+
+The simulator has no camera. `@livekit/react-native-webrtc` creates the video track
+there with no capturer attached, so no frames go up, the server never starts
+generating, and no video comes back.
+
+This example patches `@livekit/react-native-webrtc` (see
+`patches/@livekit+react-native-webrtc+144.1.1.patch`, applied by `patch-package` on
+`npm install`) so that **on the simulator only**, `getUserMedia({ video })` returns
+a track fed from a video file bundled in the app, using WebRTC's
+`RTCFileVideoCapturer`. Device builds are unchanged and still use the camera. The
+JavaScript side and the Decart SDK calls are the same on both.
+
+What the patch does, in `ios/RCTWebRTC/`:
+
+- `WebRTCModule+RTCMediaStream.m` `createVideoTrack`: adds an `#else` branch to the
+  existing `#if !TARGET_IPHONE_SIMULATOR` camera block that attaches a
+  `FileCaptureController`.
+- `FileCaptureController.{h,m}` (new): wraps `RTCFileVideoCapturer`, loops
+  `simulator-input.mp4` from the main bundle, reports the clip's width/height/frame
+  rate in the track settings (LiveKit needs them to publish), and converts frames to
+  I420 so the local `RTCView` preview renders on the simulator.
+
+To use your own clip, replace `ios/DecartRealtimeRN/simulator-input.mp4` (keep the
+name, or change `kFileCaptureFileName` in the patch). It must be in the app target's
+**Copy Bundle Resources**, and the file name must contain exactly one dot. A short
+H.264 clip of a person facing the camera works best for most models.
+
+To bring the patch into another app: copy the `patches/` file, add `patch-package`
+and `"postinstall": "patch-package"`, pin `@livekit/react-native-webrtc` to the
+exact version the patch was made against (`144.1.1` here), add the clip to your app
+bundle, then `pod install` and rebuild.
 
 ## React Native CLI (bare) gotchas
 

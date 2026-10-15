@@ -1,0 +1,149 @@
+diff --git a/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.h b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.h
+new file mode 100644
+index 0000000..1d98435
+--- /dev/null
++++ b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.h
+@@ -0,0 +1,16 @@
++#import <TargetConditionals.h>
++
++#if TARGET_IPHONE_SIMULATOR
++
++#import <Foundation/Foundation.h>
++#import <WebRTC/RTCFileVideoCapturer.h>
++
++#import "CaptureController.h"
++
++// Simulator-only stand-in for the camera: loops a video file bundled with the
++// app (see kFileCaptureFileName) into the track's RTCVideoSource.
++@interface FileCaptureController : CaptureController
++- (instancetype)initWithCapturer:(RTCFileVideoCapturer *)capturer;
++@end
++
++#endif
+diff --git a/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.m b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.m
+new file mode 100644
+index 0000000..8262aaa
+--- /dev/null
++++ b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/FileCaptureController.m
+@@ -0,0 +1,95 @@
++#import <TargetConditionals.h>
++
++#if TARGET_IPHONE_SIMULATOR
++
++#import <AVFoundation/AVFoundation.h>
++
++#import <WebRTC/RTCVideoFrame.h>
++#import <WebRTC/RTCVideoFrameBuffer.h>
++
++#import "FileCaptureController.h"
++
++// Name of the video file in the app bundle. RTCFileVideoCapturer needs exactly
++// one dot in the name. The file loops until the track is stopped.
++static NSString *const kFileCaptureFileName = @"simulator-input.mp4";
++
++@interface FileCaptureController ()<RTCVideoCapturerDelegate>
++@property(nonatomic, strong) RTCFileVideoCapturer *capturer;
++@property(nonatomic, weak) id<RTCVideoCapturerDelegate> source;
++@property(nonatomic, assign) CGSize videoSize;
++@property(nonatomic, assign) float frameRate;
++@end
++
++@implementation FileCaptureController
++
++- (instancetype)initWithCapturer:(RTCFileVideoCapturer *)capturer {
++    self = [super init];
++    if (self) {
++        // Sit between the capturer and the video source so frames can be
++        // converted before they reach the track (see capturer:didCaptureVideoFrame:).
++        self.source = capturer.delegate;
++        capturer.delegate = self;
++        self.capturer = capturer;
++        self.deviceId = @"simulator-file";
++        [self readVideoFormat];
++    }
++    return self;
++}
++
++- (void)dealloc {
++    [self.capturer stopCapture];
++}
++
++- (void)startCapture {
++    // RTCFileVideoCapturer calls the error block without a nil check, so one
++    // must always be passed.
++    [self.capturer startCapturingFromFileNamed:kFileCaptureFileName
++                                       onError:^(NSError *error) {
++                                           NSLog(@"[FileCaptureController] cannot play %@ from the app bundle: %@",
++                                                 kFileCaptureFileName,
++                                                 error);
++                                       }];
++}
++
++- (void)stopCapture {
++    [self.capturer stopCapture];
++}
++
++// LiveKit waits for the track's width and height before publishing, so report
++// the file's real size (a camera track reports its capture format here).
++- (void)readVideoFormat {
++    NSArray *nameParts = [kFileCaptureFileName componentsSeparatedByString:@"."];
++    NSURL *url = [[NSBundle mainBundle] URLForResource:nameParts.firstObject withExtension:nameParts.lastObject];
++    if (!url) {
++        return;
++    }
++    AVAssetTrack *track = [[AVURLAsset URLAssetWithURL:url options:nil] tracksWithMediaType:AVMediaTypeVideo].firstObject;
++    CGSize size = CGSizeApplyAffineTransform(track.naturalSize, track.preferredTransform);
++    self.videoSize = CGSizeMake(fabs(size.width), fabs(size.height));
++    self.frameRate = track.nominalFrameRate;
++}
++
++// The file decoder hands out NV12 CVPixelBuffers, which the local preview
++// (RTCView) does not draw on the simulator. Convert to I420, the same format
++// remote frames arrive in.
++- (void)capturer:(RTCVideoCapturer *)capturer didCaptureVideoFrame:(RTCVideoFrame *)frame {
++    RTCVideoFrame *i420Frame = [[RTCVideoFrame alloc] initWithBuffer:[frame.buffer toI420]
++                                                            rotation:frame.rotation
++                                                         timeStampNs:frame.timeStampNs];
++    [self.source capturer:capturer didCaptureVideoFrame:i420Frame];
++}
++
++- (NSDictionary *)getSettings {
++    return @{
++        @"deviceId" : self.deviceId,
++        @"groupId" : @"",
++        @"facingMode" : @"user",
++        @"width" : @(self.videoSize.width),
++        @"height" : @(self.videoSize.height),
++        @"frameRate" : @(self.frameRate)
++    };
++}
++
++@end
++
++#endif
+diff --git a/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/WebRTCModule+RTCMediaStream.m b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/WebRTCModule+RTCMediaStream.m
+index 14041b2..6711fb5 100644
+--- a/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/WebRTCModule+RTCMediaStream.m
++++ b/node_modules/@livekit/react-native-webrtc/ios/RCTWebRTC/WebRTCModule+RTCMediaStream.m
+@@ -10,6 +10,7 @@
+ #import "WebRTCModule+RTCPeerConnection.h"
+ #import "WebRTCModuleOptions.h"
+ 
++#import "FileCaptureController.h"
+ #import "ProcessorProvider.h"
+ #import "ScreenCaptureController.h"
+ #import "ScreenCapturer.h"
+@@ -156,6 +157,13 @@ - (RTCVideoTrack *)createVideoTrack:(NSDictionary *)constraints {
+         [WebRTCModuleOptions sharedInstance].enableMultitaskingCameraAccess;
+     videoTrack.captureController = videoCaptureController;
+     [videoCaptureController startCapture];
++#else
++    // The simulator has no camera: feed the track from a bundled video file
++    // instead, so the rest of the app (and the SDK) sees a normal camera track.
++    RTCFileVideoCapturer *fileCapturer = [[RTCFileVideoCapturer alloc] initWithDelegate:videoSource];
++    FileCaptureController *fileCaptureController = [[FileCaptureController alloc] initWithCapturer:fileCapturer];
++    videoTrack.captureController = fileCaptureController;
++    [fileCaptureController startCapture];
+ #endif
+ 
+     return videoTrack;

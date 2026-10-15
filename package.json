@@ -7,12 +7,13 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
-    "test": "jest"
+    "test": "jest",
+    "postinstall": "patch-package"
   },
   "dependencies": {
-    "@decartai/sdk": "^0.1.14",
+    "@decartai/sdk": "^0.2.11",
     "@livekit/react-native": "^2.11.1",
-    "@livekit/react-native-webrtc": "^144.1.1",
+    "@livekit/react-native-webrtc": "144.1.1",
     "@react-native/new-app-screen": "0.82.1",
     "livekit-client": "^2.20.1",
     "react": "19.1.1",
@@ -36,6 +37,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "eslint": "^8.19.0",
     "jest": "^29.6.3",
+    "patch-package": "^8.0.1",
     "prettier": "2.8.8",
     "react-test-renderer": "19.1.1",
     "typescript": "^5.8.3"
