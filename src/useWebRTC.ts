@@ -13,6 +13,7 @@ export type ConnectionState =
   | 'disconnected'
   | 'connecting'
   | 'connected'
+  | 'generating'
   | 'reconnecting'
   | 'failed';
 
@@ -70,8 +71,23 @@ export function useWebRTC() {
             onRemoteStream: remote => {
               if (generation !== connectionGenerationRef.current) return;
               setRemoteMediaStream(remote);
-              setIsConnecting(false);
-              setConnectionState('connected');
+            },
+            // `connected` only means the room was joined and the camera track
+            // published. `generating` means the server produced its first
+            // transformed frame, so that is when the loading state ends.
+            onConnectionChange: state => {
+              if (generation !== connectionGenerationRef.current) return;
+              setConnectionState(state);
+              setIsConnecting(
+                state !== 'generating' && state !== 'disconnected',
+              );
+              if (state === 'disconnected') {
+                // The server ended the session: release the camera too.
+                stream.getTracks().forEach(track => track.stop());
+                realtimeClientRef.current = null;
+                setLocalMediaStream(null);
+                setRemoteMediaStream(null);
+              }
             },
           },
         );

@@ -13,7 +13,7 @@ interface Props {
 }
 
 // Fullscreen transformed (remote) stream, with the raw camera in a small PiP.
-// Before the remote stream arrives, the local camera fills the screen.
+// Until the server is generating, the local camera fills the screen.
 export function VideoRenderer({
   facingMode,
   localMediaStream,
@@ -21,7 +21,10 @@ export function VideoRenderer({
   isConnecting,
   connectionState,
 }: Props) {
-  const showFullScreenLocal = !remoteMediaStream;
+  // Show the transformed stream only once the server is generating; before
+  // that the remote stream (if any) has no frames yet.
+  const showFullScreenLocal =
+    !remoteMediaStream || connectionState !== 'generating';
   const showLoading = showFullScreenLocal && isConnecting;
 
   if (!localMediaStream && !remoteMediaStream) {
